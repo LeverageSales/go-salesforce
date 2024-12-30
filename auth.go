@@ -24,6 +24,8 @@ type authentication struct {
 	Signature   string `json:"signature"`
 	grantType   string
 	creds       Creds
+
+	Client *http.Client
 }
 
 type Creds struct {
@@ -35,6 +37,8 @@ type Creds struct {
 	ConsumerSecret string
 	ConsumerRSAPem string
 	AccessToken    string
+
+	Client *http.Client
 }
 
 const JwtExpirationTime = 5 * time.Minute
@@ -47,7 +51,7 @@ const (
 )
 
 func validateAuth(sf Salesforce) error {
-	if sf.auth == nil || sf.auth.AccessToken == "" {
+	if sf.auth == nil || (sf.auth.AccessToken == "" && sf.auth.Client == nil) {
 		return errors.New("not authenticated: please use salesforce.Init()")
 	}
 	return nil
@@ -180,6 +184,17 @@ func setAccessToken(domain string, accessToken string) (*authentication, error) 
 	if err := validateSession(*auth); err != nil {
 		return nil, err
 	}
+	auth.grantType = grantTypeAccessToken
+	return auth, nil
+}
+
+func setHttpClient(domain string, client *http.Client) (*authentication, error) {
+	auth := &authentication{InstanceUrl: domain, Client: client}
+	if err := validateSession(*auth); err != nil {
+		return nil, err
+	}
+	// grantType does not matter as the oauth client will
+	// take care of refreshing token if required
 	auth.grantType = grantTypeAccessToken
 	return auth, nil
 }

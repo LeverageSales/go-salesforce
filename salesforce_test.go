@@ -14,6 +14,20 @@ import (
 	"github.com/spf13/afero"
 )
 
+type CustomTransport struct {
+	Transport http.RoundTripper
+	Header    http.Header
+}
+
+func (c *CustomTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for key, values := range c.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	return c.Transport.RoundTrip(req)
+}
+
 func setupTestServer(body any, status int) (*httptest.Server, authentication) {
 	respBody, _ := json.Marshal(body)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -452,9 +466,6 @@ func TestInit(t *testing.T) {
 	sfAuthAccessToken := authentication{
 		AccessToken: "1234",
 		InstanceUrl: "example.com",
-		Id:          "123abc",
-		IssuedAt:    "01/01/1970",
-		Signature:   "signed",
 		grantType:   grantTypeAccessToken,
 	}
 	serverAccessToken, _ := setupTestServer(sfAuthAccessToken, http.StatusOK)
@@ -463,6 +474,7 @@ func TestInit(t *testing.T) {
 		Domain:      serverAccessToken.URL,
 		AccessToken: "1234",
 	}
+	sfAuthAccessToken.InstanceUrl = serverAccessToken.URL
 	sfAuthAccessToken.creds = credsAccessToken
 
 	sfAuthJwt := authentication{
@@ -477,12 +489,32 @@ func TestInit(t *testing.T) {
 	defer serverJwt.Close()
 	sampleKey, _ := os.ReadFile("test/sample_key.pem")
 	credsJwt := Creds{
-		Domain:         serverAccessToken.URL,
+		Domain:         serverJwt.URL,
 		Username:       "u",
 		ConsumerKey:    "key",
 		ConsumerRSAPem: string(sampleKey),
 	}
-	sfAuthAccessToken.creds = credsAccessToken
+	sfAuthJwt.creds = credsJwt
+
+	client := http.Client{
+		Transport:     nil,
+		CheckRedirect: nil,
+		Jar:           nil,
+		Timeout:       0,
+	}
+	sfAuthClient := authentication{
+		InstanceUrl: "example.com",
+		grantType:   grantTypeAccessToken,
+		Client:      &client,
+	}
+	serverClient, _ := setupTestServer("not used", http.StatusOK)
+	defer serverClient.Close()
+	credsClient := Creds{
+		Domain: serverClient.URL,
+		Client: &client,
+	}
+	sfAuthClient.InstanceUrl = serverClient.URL
+	sfAuthClient.creds = credsClient
 
 	type args struct {
 		creds Creds
@@ -514,6 +546,13 @@ func TestInit(t *testing.T) {
 		{
 			name:    "authentication_access_token",
 			args:    args{creds: credsAccessToken},
+			want:    &Salesforce{auth: &sfAuthAccessToken},
+			wantErr: false,
+		},
+		{
+			name:    "authentication_client",
+			args:    args{creds: credsClient},
+			want:    &Salesforce{auth: &sfAuthClient},
 			wantErr: false,
 		},
 		{
@@ -772,6 +811,107 @@ func TestSalesforce_DoRequest(t *testing.T) {
 			name: "validation_fail_auth",
 			fields: fields{
 				auth: nil,
+			},
+			args: args{
+				method: http.MethodGet,
+				uri:    "/request",
+				body:   []byte("example"),
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sf := &Salesforce{
+				auth: tt.fields.auth,
+			}
+			got, err := sf.DoRequest(tt.args.method, tt.args.uri, tt.args.body)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Salesforce.DoRequest() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != nil {
+				gotBody, _ := io.ReadAll(got.Body)
+				wantBody, _ := io.ReadAll(tt.want.Body)
+				if got.StatusCode != tt.want.StatusCode || string(gotBody) != string(wantBody) {
+					t.Errorf("Salesforce.DoRequest() = %v %v, want %v %v", got.StatusCode, string(gotBody), tt.want.StatusCode, string(wantBody))
+				}
+			} else if !tt.wantErr {
+				t.Error("Salesforce.DoRequest() did not return a response")
+			}
+		})
+	}
+}
+
+func TestSalesforce_DoRequest_Client(t *testing.T) {
+	customAuthorization := "Bearer custom-client-1234"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var response any
+		if r.Header.Get("Authorization") == customAuthorization {
+			w.WriteHeader(http.StatusOK)
+			response = map[string]any{"status": "success"}
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+			response = []any{}
+		}
+		respBody, _ := json.Marshal(response)
+		if _, err := w.Write(respBody); err != nil {
+			panic(err.Error())
+		}
+	}))
+	defer server.Close()
+
+	sfAuth := authentication{
+		InstanceUrl: server.URL,
+		AccessToken: "accesstokenvalue",
+	}
+
+	sfAuthClient := authentication{
+		InstanceUrl: server.URL,
+		grantType:   grantTypeAccessToken,
+		Client: &http.Client{
+			Transport: &CustomTransport{
+				Transport: http.DefaultTransport,
+				Header:    http.Header{"Authorization": {customAuthorization}},
+			},
+		},
+	}
+
+	type fields struct {
+		auth *authentication
+	}
+	type args struct {
+		method string
+		uri    string
+		body   []byte
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    *http.Response
+		wantErr bool
+	}{
+		{
+			name: "successful_request",
+			fields: fields{
+				auth: &sfAuthClient,
+			},
+			args: args{
+				method: http.MethodGet,
+				uri:    "/request",
+				body:   []byte("example"),
+			},
+			want: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("{\"status\":\"success\"}")),
+			},
+			wantErr: false,
+		},
+		{
+			name: "validation_wrong_client",
+			fields: fields{
+				auth: &sfAuth,
 			},
 			args: args{
 				method: http.MethodGet,

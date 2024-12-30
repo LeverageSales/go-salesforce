@@ -70,9 +70,16 @@ func doRequest(auth *authentication, payload requestPayload) (*http.Response, er
 	req.Header.Set("User-Agent", "go-salesforce")
 	req.Header.Set("Content-Type", payload.content)
 	req.Header.Set("Accept", payload.content)
-	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	if auth.AccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
+	}
+
+	client := auth.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return resp, err
 	}
@@ -226,6 +233,11 @@ func Init(creds Creds) (*Salesforce, error) {
 			creds.Domain,
 			creds.AccessToken,
 		)
+	} else if creds.Client != nil {
+		auth, err = setHttpClient(
+			creds.Domain,
+			creds.Client,
+		)
 	} else if creds.Domain != "" && creds.Username != "" &&
 		creds.ConsumerKey != "" && creds.ConsumerRSAPem != "" {
 		auth, err = jwtFlow(
@@ -239,7 +251,7 @@ func Init(creds Creds) (*Salesforce, error) {
 
 	if err != nil {
 		return nil, err
-	} else if auth == nil || auth.AccessToken == "" {
+	} else if auth == nil || (auth.AccessToken == "" && auth.Client == nil) {
 		return nil, errors.New("unknown authentication error")
 	}
 	auth.creds = creds
