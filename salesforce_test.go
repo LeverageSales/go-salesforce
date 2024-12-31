@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/afero"
 )
@@ -1071,6 +1072,71 @@ func TestSalesforce_QueryStruct(t *testing.T) {
 			want: []account{{
 				Id:   "123abc",
 				Name: "test account",
+			}},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sf := &Salesforce{
+				auth: tt.fields.auth,
+			}
+			if err := sf.QueryStruct(tt.args.soqlStruct, tt.args.sObject); (err != nil) != tt.wantErr {
+				t.Errorf("Salesforce.QueryStruct() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(tt.args.sObject, &tt.want) {
+				t.Errorf("Salesforce.QueryStruct() = %v, want %v", tt.args.sObject, tt.want)
+			}
+		})
+	}
+}
+
+func TestSalesforce_QueryStruct_WithTime(t *testing.T) {
+	type account struct {
+		Id        string
+		Name      string
+		CreatedAt time.Time
+	}
+	resp := queryResponse{
+		TotalSize: 1,
+		Done:      true,
+		Records: []map[string]any{{
+			"Id":        "123abc",
+			"Name":      "test account",
+			"CreatedAt": "2024-04-02T08:30:00.000+0000",
+		}},
+	}
+	server, sfAuth := setupTestServer(resp, http.StatusOK)
+	defer server.Close()
+
+	type fields struct {
+		auth *authentication
+	}
+	type args struct {
+		soqlStruct any
+		sObject    any
+	}
+	time, _ := time.Parse("2006-01-02T15:04:05.000-0700", "2024-04-02T08:30:00.000+0000")
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    []account
+		wantErr bool
+	}{
+		{
+			name: "successful_query",
+			fields: fields{
+				auth: &sfAuth,
+			},
+			args: args{
+				soqlStruct: account{},
+				sObject:    &[]account{},
+			},
+			want: []account{{
+				Id:        "123abc",
+				Name:      "test account",
+				CreatedAt: time,
 			}},
 			wantErr: false,
 		},

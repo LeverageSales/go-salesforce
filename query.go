@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
+	"time"
 
 	"github.com/go-viper/mapstructure/v2"
 )
@@ -53,10 +55,50 @@ func performQuery(auth *authentication, query string, sObject any) error {
 		}
 	}
 
-	sObjectError := mapstructure.Decode(queryResp.Records, sObject)
+	sObjectError := decode(queryResp.Records, sObject)
 	if sObjectError != nil {
 		return sObjectError
 	}
 
 	return nil
+}
+
+func ToTimeHookFunc() mapstructure.DecodeHookFunc {
+	return func(
+		f reflect.Type,
+		t reflect.Type,
+		data interface{}) (interface{}, error) {
+		if t != reflect.TypeOf(time.Time{}) {
+			return data, nil
+		}
+
+		switch f.Kind() {
+		case reflect.String:
+			return time.Parse("2006-01-02T15:04:05.000-0700", data.(string))
+		case reflect.Float64:
+			return time.Unix(0, int64(data.(float64))*int64(time.Millisecond)), nil
+		case reflect.Int64:
+			return time.Unix(0, data.(int64)*int64(time.Millisecond)), nil
+		default:
+			return data, nil
+		}
+		// Convert it by parsing
+	}
+}
+
+func decode(input interface{}, result interface{}) error {
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Metadata: nil,
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			ToTimeHookFunc()),
+		Result: result,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := decoder.Decode(input); err != nil {
+		return err
+	}
+	return err
 }
