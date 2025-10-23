@@ -130,6 +130,8 @@ func doAuth(url string, body *strings.Reader) (*authentication, error) {
 		return nil, errors.New(string(resp.Status) + ":" + " failed authentication")
 	}
 
+	defer resp.Body.Close()
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -141,7 +143,6 @@ func doAuth(url string, body *strings.Reader) (*authentication, error) {
 		return nil, jsonError
 	}
 
-	defer resp.Body.Close()
 	return auth, nil
 }
 
